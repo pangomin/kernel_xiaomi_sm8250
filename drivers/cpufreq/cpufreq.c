@@ -527,19 +527,53 @@ unsigned int cpufreq_driver_resolve_freq(struct cpufreq_policy *policy,
 EXPORT_SYMBOL_GPL(cpufreq_driver_resolve_freq);
 
 unsigned int cpufreq_policy_transition_delay_us(struct cpufreq_policy *policy)
+
+static bool is_device_on_battery(void)
 {
-	unsigned int latency;
+    struct power_supply *psy;
+    union power_supply_propval val;
+    bool on_battery = false;
 
-	if (policy->transition_delay_us)
-		return policy->transition_delay_us;
+    psy = power_supply_get_by_name("battery");
+    if (psy) {
+        if (!power_supply_get_property(psy, POWER_SUPPLY_PROP_ONLINE, &val))
+            on_battery = !val.intval;
+        power_supply_put(psy);
+    }
 
-	latency = policy->cpuinfo.transition_latency / NSEC_PER_USEC;
-	if (latency)
-		/* Give a 50% breathing room between updates */
-		return latency + (latency >> 1);
-
-	return USEC_PER_MSEC;
+    return on_battery;
 }
+
+static unsigned int get_transition_delay(struct cpufreq_policy *policy)
+{
+    unsigned int latency;
+    unsigned int delay;
+
+    if (policy->transition_delay_us)
+        return policy->transition_delay_us;
+
+    latency = policy->cpuinfo.transition_latency / NSEC_PER_USEC;
+
+    if (latency) {
+        unsigned int load = this_cpu_read(cpuinfo_cur_freq) * 100 / policy->max;
+        if (is_device_on_battery()) {
+            delay = latency >> 1;
+        } else {
+            if (load < 50) {
+                delay = latency;
+            } else {
+                delay = latency + (latency >> 1);
+            }
+        }
+        trace_cpufreq_transition_delay(policy->cpu, delay, load);
+        return delay;
+    }
+
+    trace_cpufreq_transition_delay(policy->cpu, USEC_PER_MSEC, 0);
+    return USEC_PER_MSEC;
+}
+
+
 EXPORT_SYMBOL_GPL(cpufreq_policy_transition_delay_us);
 
 /*********************************************************************
