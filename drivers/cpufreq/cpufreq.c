@@ -527,19 +527,58 @@ unsigned int cpufreq_driver_resolve_freq(struct cpufreq_policy *policy,
 EXPORT_SYMBOL_GPL(cpufreq_driver_resolve_freq);
 
 unsigned int cpufreq_policy_transition_delay_us(struct cpufreq_policy *policy)
+
+/* Define constants for better readability and maintainability */
+#define DEFAULT_TRANSITION_DELAY_US    1000    /* 1 ms default delay if no latency is available */
+#define BREATHING_ROOM_PERCENTAGE      50      /* 50% buffer for frequency transitions */
+#define MAX_TRANSITION_DELAY_US        10000   /* Upper limit to prevent excessive delays */
+#define NSEC_TO_USEC(nsec)             ((nsec) / NSEC_PER_USEC)
+
+/**
+ * calculate_transition_delay - Calculate the frequency transition delay
+ * @policy: Pointer to the cpufreq policy structure
+ *
+ * Calculates the frequency transition delay with safety checks and reasonable limits.
+ * Uses policy-defined delay, CPU transition latency, or a default value.
+ *
+ * Return: The calculated transition delay in microseconds.
+ */
+static unsigned int calculate_transition_delay(struct cpufreq_policy *policy)
 {
-	unsigned int latency;
+    unsigned int transition_delay_us;
+    unsigned int latency_us;
 
-	if (policy->transition_delay_us)
-		return policy->transition_delay_us;
+    /* Validate input pointer */
+    if (!policy) {
+        pr_warn("%s: NULL policy passed, using default delay\n", __func__);
+        return DEFAULT_TRANSITION_DELAY_US;
+    }
 
-	latency = policy->cpuinfo.transition_latency / NSEC_PER_USEC;
-	if (latency)
-		/* Give a 50% breathing room between updates */
-		return latency + (latency >> 1);
+    /* Use the policy-defined transition delay if available */
+    if (policy->transition_delay_us) {
+        return min(policy->transition_delay_us, (unsigned int)MAX_TRANSITION_DELAY_US);
+    }
 
-	return USEC_PER_MSEC;
+    /* Calculate delay based on CPU transition latency */
+    if (policy->cpuinfo.transition_latency) {
+        /* Safely convert nanoseconds to microseconds */
+        latency_us = NSEC_TO_USEC(policy->cpuinfo.transition_latency);
+
+        /* Use safe multiplication to prevent potential overflow */
+        transition_delay_us = latency_us * (100 + BREATHING_ROOM_PERCENTAGE) / 100;
+
+        /* Clamp the delay between default and maximum values */
+        transition_delay_us = clamp(transition_delay_us, 
+                                    DEFAULT_TRANSITION_DELAY_US, 
+                                    (unsigned int)MAX_TRANSITION_DELAY_US);
+
+        return transition_delay_us;
+    }
+
+    /* Return the default transition delay if no latency is available */
+    return DEFAULT_TRANSITION_DELAY_US;
 }
+
 EXPORT_SYMBOL_GPL(cpufreq_policy_transition_delay_us);
 
 /*********************************************************************
